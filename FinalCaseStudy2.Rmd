@@ -1,0 +1,170 @@
+---
+title: "FinalCaseStudy2"
+author: "Nolan Dulude"
+date: "2023-12-07"
+output: html_document
+---
+
+```{r}
+library("RCurl")
+library(tidyverse)
+library(readr)
+library(aws.s3)
+library(ggplot2)
+library(e1071)
+library(caret)
+library(class)
+library(ROSE)
+set.seed(5)
+
+
+missing_attrition <-read.table(textConnection(getURL("https://msdsds6306.s3.us-east-2.amazonaws.com/CaseStudy2CompSet+No+Attrition.csv")), sep=",", header=TRUE)
+missing_salary<-read.table(textConnection(getURL("https://msdsds6306.s3.us-east-2.amazonaws.com/CaseStudy2CompSet+No+Salary.csv")), sep=",", header=TRUE)
+casestudy2  <- read.table(textConnection(getURL("https://s3.us-east-2.amazonaws.com/msds.ds.6306.2/CaseStudy2-data.csv")), sep=",", header=TRUE)
+
+head(casestudy2)
+summary(casestudy2)
+count <- table(casestudy2$Attrition)['Yes']
+count
+sum(is.na(casestudy2))
+
+casestudy2 %>% ggplot(aes(Age, MonthlyIncome)) + geom_point(position = "jitter") + facet_wrap(~Attrition+JobRole, labeller = labeller(Attrition = c("Yes" = "Attrition: Yes", "No" = "Attrition: No")))+ labs(title = "Monthly Income vs. Age", subtitle = "Relationship with Attrition and Job Role")
+
+casestudy2 %>% ggplot(aes(JobRole, StockOptionLevel)) + geom_point(position = "jitter") + facet_wrap(~Attrition+OverTime, labeller = labeller(Attrition = c("Yes" = "Attrition: Yes", "No" = "Attrition: No"), OverTime = c("Yes" = "OverTime: Yes", "No" = "OverTime: No"))) +  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + labs(title = "Stock Option Level vs Job Role", subtitle = "Relationship with Attrition and Overtime")
+
+count2 <- casestudy2 %>% group_by(Attrition, JobRole) %>% summarise(count = n()) %>% pivot_wider(names_from = Attrition, values_from = count, values_fill = list(count = 0))
+count2
+count5 <- casestudy2 %>% group_by(Attrition, OverTime) %>% summarise(count = n()) %>% pivot_wider(names_from = Attrition, values_from = count, values_fill = list(count = 0))
+count5
+count14 <- casestudy2 %>% group_by(Attrition, StockOptionLevel) %>% summarise(count = n()) %>% pivot_wider(names_from = Attrition, values_from = count, values_fill = list(count = 0))
+count14
+
+
+
+job_role <- casestudy2$JobRole
+
+level_order <- c("Healthcare Representative", "Human Resources","Laboratory Technician","Manager", "Manufacturing Director","Research Director", "Research Scientist", "Sales Executive", "Sales Representative")
+
+casestudy2$JobRole_Ordinal <- factor(casestudy2$JobRole, levels = level_order, ordered = TRUE)
+casestudy2$JobRole_Ordinal <- as.numeric(casestudy2$JobRole_Ordinal)
+
+level_order2 <- c("No", "Yes")
+casestudy2$OverTime_Ordinal <- factor(casestudy2$OverTime, levels = level_order2, ordered = TRUE)
+casestudy2$OverTime_Ordinal <- as.numeric(casestudy2$OverTime_Ordinal)
+
+
+level_order3 <- c("Healthcare Representative", "Human Resources","Laboratory Technician","Manager", "Manufacturing Director","Research Director", "Research Scientist", "Sales Executive", "Sales Representative")
+
+missing_attrition$JobRole_Ordinal <- factor(missing_attrition$JobRole, levels = level_order3, ordered = TRUE)
+missing_attrition$JobRole_Ordinal <- as.numeric(missing_attrition$JobRole_Ordinal)
+
+level_order4 <- c("No", "Yes")
+missing_attrition$OverTime_Ordinal <- factor(missing_attrition$OverTime, levels = level_order4, ordered = TRUE)
+missing_attrition$OverTime_Ordinal <- as.numeric(missing_attrition$OverTime_Ordinal)
+
+
+trainIndex = sample(seq(1,870,1),580)
+traincase = casestudy2[trainIndex,]
+testcase = casestudy2[-trainIndex,]
+dim(traincase)
+dim(testcase)
+
+#KNN model
+classifications1 = knn(train = traincase[c("JobRole_Ordinal", "StockOptionLevel", "OverTime_Ordinal")], test = testcase[, c("JobRole_Ordinal", "StockOptionLevel", "OverTime_Ordinal")], cl = traincase$Attrition, prob = TRUE, k = 5) 
+
+table(classifications1, testcase$Attrition)
+
+c2 = confusionMatrix(table(classifications1 , testcase$Attrition), mode = "everything") # Note F1
+c2
+
+summary(casestudy2$Attrition)
+count_yes <- table(casestudy2$Attrition)['Yes']
+count_yes
+count_no <- table(casestudy2$Attrition)['No']
+count_no
+140/870
+#Refining the model and changing the threshold
+probs1 = ifelse(classifications1 == "Yes",attributes(classifications1)$prob, 1- attributes(classifications1)$prob)
+
+NewClass = ifelse(probs1 > .12, "Yes", "No")
+table(NewClass, testcase$Attrition)
+
+NewClass <- factor(NewClass, levels = c("No", "Yes"))  # Replace with your levels
+testcase$Attrition <- as.factor(testcase$Attrition)  # Replace with your levels
+
+# Create confusion matrix
+CM_no <- confusionMatrix(table(NewClass, testcase$Attrition), positive = "No", mode = "everything")
+CM_no
+
+CM_yes <- confusionMatrix(table(NewClass, testcase$Attrition),positive = "Yes", mode = "everything")
+CM_yes
+
+Macro_F1_New_Thresh = mean(c(CM_no[4]$byClass["F1"],CM_yes[4]$byClass["F1"]))
+Macro_F1_New_Thresh
+
+
+
+
+#Prediction attrition using the Missing_Attrition data set
+predictions1 <- knn(train = traincase[, c("JobRole_Ordinal", "StockOptionLevel", "OverTime_Ordinal")],test = missing_attrition[, c("JobRole_Ordinal", "StockOptionLevel", "OverTime_Ordinal")], cl = traincase$Attrition , prob = TRUE, k = 5)
+
+probs2 = ifelse(predictions1 == "Yes",attributes(predictions1)$prob, 1- attributes(predictions1)$prob)
+NewClass2 = ifelse(probs2 > .12, "Yes", "No")
+
+missing_ida <- data.frame(missing_attrition$ID)
+head(missing_ida)
+missing_a <- data.frame(NewClass2)
+head(missing_a)
+att <- cbind(missing_ida, missing_a)
+head(att)
+att <- att %>% rename(ID=missing_attrition.ID, attrition = NewClass2)
+head(att)
+
+
+#Linear regression model for monthly Income
+fit1 <- lm(MonthlyIncome~TotalWorkingYears, data = casestudy2)
+casestudy2 %>% ggplot(aes(x = TotalWorkingYears, y=MonthlyIncome)) + geom_point(position = "jitter")+ ggtitle("LR Model: Total Working Years vs Monthly Income")+ geom_smooth(method = "lm")
+
+fit2 <- lm(MonthlyIncome~Age, data = casestudy2)
+casestudy2 %>% ggplot(aes(x = MonthlyIncome, y=Age)) + geom_point(position = "jitter")+ ggtitle("LR Model: Age vs Monthly Income")+ geom_smooth(method = "lm")
+
+
+
+predictors <- casestudy2[, c("TotalWorkingYears", "Age")]
+target <- casestudy2$MonthlyIncome
+ 
+lm_model <- train(predictors, target, method = "lm")
+print(lm_model)
+summary(lm_model)
+
+casestudy2$predicted_income <- predict(lm_model, casestudy2)
+
+casestudy2 %>% ggplot(aes(x = TotalWorkingYears, y = MonthlyIncome, colour = Age)) +
+  geom_point(position = "jitter") +
+  scale_color_gradient() +
+  labs(
+    y = "Monthly Income",
+    x = "Total Working Years",
+    color = "Age",
+    size = "Displacement"
+  )+geom_smooth(method = "lm")
+
+
+new_data <- data.frame(missing_salary$TotalWorkingYears, missing_salary$Age) 
+new_data <- new_data %>% rename(TotalWorkingYears=missing_salary.TotalWorkingYears, Age= missing_salary.Age)
+predicted_income <- predict(lm_model, newdata = new_data)
+print(predicted_income)
+
+missing_id <- missing_salary$ï..ID
+missing_id <- data.frame(missing_id)
+head(missing_id)
+predicted_income <- data.frame(predicted_income)
+head(predicted_income)
+
+
+
+salary <- cbind(missing_id, predicted_income)
+head(salary)
+salary <- salary %>% rename(ID=missing_id, MonthlyIncome= predicted_income)
+head(salary)
+```
